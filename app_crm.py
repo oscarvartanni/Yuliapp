@@ -4,8 +4,8 @@ from docx.shared import Inches
 import io
 import re
 
-# --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="CRM Pro - Generador con Logo", layout="wide")
+# --- CONFIGURACIÓN ---
+st.set_page_config(page_title="CRM Pro - Generador Experto", layout="wide")
 st.title("🚀 Generador de Documentos CRM")
 
 TEMPLATES = {
@@ -14,92 +14,103 @@ TEMPLATES = {
     "M101 Escenarios": "M101_CRM_Lista_de_escenarios_para_CRPUAT V2 (1).docx"
 }
 
-CAMPOS_CONFIG = {
-    "M102 Gap Analysis": ["Fecha", "Objetivo", "Asistentes", "Módulos", "Pendientes"],
-    "M100 Minuta": ["Fecha", "Objetivo", "Asistentes", "Puntos discutidos", "Acuerdos"],
-    "M101 Escenarios": ["Fecha", "Objetivo", "Escenarios de prueba"]
-}
+# Configuración detallada para Minuta
+CAMPOS_MINUTA = [
+    {"id": "Fecha", "label": "Fecha de la reunión", "tipo": "text"},
+    {"id": "Objetivo", "label": "Objetivo de la sesión", "tipo": "area"},
+    {"id": "Asistentes", "label": "Asistentes (Formato: Nombre, Puesto - Uno por línea)", "tipo": "area", "help": "Ejemplo:\nOscar, Director\nYuliana, Project Manager"},
+    {"id": "Puntos discutidos", "label": "Puntos discutidos (Uno por línea)", "tipo": "area", "help": "Cada línea aparecerá en un numeral diferente."},
+    {"id": "Pendientes cliente", "label": "Pendientes del Cliente (Formato: Tarea, Responsable, Fecha)", "tipo": "area"},
+    {"id": "Pendientes Mycloud", "label": "Pendientes Mycloud (Formato: Tarea, Responsable, Fecha)", "tipo": "area"}
+]
 
 def extraer_texto_base(file):
     doc = Document(file)
-    texto = "\n".join([p.text for p in doc.paragraphs])
-    for tabla in doc.tables:
-        for fila in tabla.rows:
-            for celda in fila.cells:
-                texto += "\n" + celda.text
-    return texto
+    return "\n".join([p.text for p in doc.paragraphs] + [c.text for t in doc.tables for r in t.rows for c in r.cells])
 
-def generar_documento(template_path, datos_finales, logo_file=None):
+def rellenar_tabla_triple(tabla, texto_area):
+    """Lógica para tablas de 3 columnas (Pendientes, Responsable, Fecha)"""
+    while len(tabla.rows) > 1:
+        tabla._tbl.remove(tabla.rows[-1]._tr)
+    lineas = [l.strip() for l in texto_area.split('\n') if l.strip()]
+    for linea in lineas:
+        partes = linea.split(',')
+        nueva_fila = tabla.add_row().cells
+        nueva_fila[0].text = partes[0].strip() if len(partes) > 0 else ""
+        nueva_fila[1].text = partes[1].strip() if len(partes) > 1 else ""
+        nueva_fila[2].text = partes[2].strip() if len(partes) > 2 else ""
+
+def generar_documento(template_path, datos, logo=None):
     doc = Document(template_path)
     
-    # 1. Insertar Logo en el Encabezado (si se subió uno)
-    if logo_file:
-        section = doc.sections[0]
-        header = section.header
-        # Limpiar encabezado previo si existe y añadir el nuevo
-        paragraph = header.paragraphs[0]
-        paragraph.alignment = 1 # 1 = Centrado
-        run = paragraph.add_run()
-        run.add_picture(logo_file, width=Inches(1.5)) # Ajusta el tamaño aquí
+    if logo:
+        header_para = doc.sections[0].header.paragraphs[0]
+        header_para.alignment = 1
+        header_para.add_run().add_picture(logo, width=Inches(1.5))
 
-    # 2. Reemplazo de texto en párrafos
+    # Reemplazo de Puntos Discutidos en los numerales 1, 2, 3...
+    puntos = [p.strip() for p in datos.get("Puntos discutidos", "").split('\n') if p.strip()]
+    idx_punto = 0
     for p in doc.paragraphs:
-        for campo, valor in datos_finales.items():
-            etiqueta = f"{campo}:"
-            if etiqueta in p.text:
-                texto_sustituto = "" if valor == "[OMITIDO]" else valor
-                p.text = f"{etiqueta} {texto_sustituto}"
+        # Buscamos los párrafos que tienen los números de la lista
+        if re.match(r"^\d+\.", p.text.strip()) and idx_punto < len(puntos):
+            p.text = f"{idx_punto + 1}. {puntos[idx_punto]}"
+            idx_punto += 1
+        # Reemplazo estándar de Fecha y Objetivo
+        for campo in ["Fecha", "Objetivo"]:
+            if f"{campo}:" in p.text:
+                p.text = f"{campo}: {datos.get(campo, '')}" if datos.get(campo) != "[OMITIDO]" else f"{campo}:"
 
-    # 3. Lógica para tabla de Asistentes
-    if "Asistentes" in datos_finales and datos_finales["Asistentes"] != "[OMITIDO]":
-        asistentes = [a.strip() for a in datos_finales["Asistentes"].split('\n') if a.strip()]
-        for tabla in doc.tables:
-            if len(tabla.rows) > 0 and "Nombre" in tabla.cell(0, 0).text:
-                while len(tabla.rows) > 1:
-                    tabla._tbl.remove(tabla.rows[-1]._tr)
-                for asis in asistentes:
-                    nueva_fila = tabla.add_row().cells
-                    partes = asis.split(',')
-                    nueva_fila[0].text = partes[0].strip()
-                    if len(partes) > 1:
-                        nueva_fila[1].text = partes[1].strip()
-                break
+    # Manejo de tablas
+    for tabla in doc.tables:
+        cabecera = tabla.cell(0, 0).text.lower()
+        # 1. Tabla Asistentes
+        if "nombre" in cabecera and "puesto" in cabecera:
+            if datos.get("Asistentes") != "[OMITIDO]":
+                while len(tabla.rows) > 1: tabla._tbl.remove(tabla.rows[-1]._tr)
+                for asis in datos.get("Asistentes", "").split('\n'):
+                    if ',' in asis:
+                        nf = tabla.add_row().cells
+                        p = asis.split(',')
+                        nf[0].text, nf[1].text = p[0].strip(), p[1].strip()
+        
+        # 2. Tablas de Pendientes
+        elif "pendientes del cliente" in cabecera:
+            rellenar_tabla_triple(tabla, datos.get("Pendientes cliente", ""))
+        elif "pendientes mycloud" in cabecera:
+            rellenar_tabla_triple(tabla, datos.get("Pendientes Mycloud", ""))
+            
     return doc
 
 # --- INTERFAZ ---
-st.sidebar.header("⚙️ Configuración Visual")
-logo_subido = st.sidebar.file_uploader("Insertar Logo (Imagen):", type=["png", "jpg", "jpeg"])
+st.sidebar.header("🎨 Personalización")
+logo = st.sidebar.file_uploader("Logo de la empresa", type=["png", "jpg"])
 
-opcion = st.selectbox("1. Selecciona plantilla:", list(TEMPLATES.keys()))
-archivo_subido = st.file_uploader("2. Sube el archivo con información:", type=["docx"])
+opcion = st.selectbox("Selecciona plantilla:", list(TEMPLATES.keys()))
+archivo = st.file_uploader("Sube el Word con la info:", type=["docx"])
 
-if archivo_subido:
-    texto_fuente = extraer_texto_base(archivo_subido)
-    datos_recolectados = {}
+if archivo:
+    texto_base = extraer_texto_base(archivo)
+    datos_finales = {}
     
-    with st.form("form_campos"):
-        for campo in CAMPOS_CONFIG[opcion]:
-            st.markdown(f"**{campo}**")
-            col_txt, col_chk = st.columns([4, 1])
-            
-            match = re.search(rf"{campo}:\s*(.*)", texto_fuente, re.I)
-            sugerencia = match.group(1).strip() if match else ""
-            
-            with col_txt:
-                val_usuario = st.text_area(f"Editar {campo}", value=sugerencia, key=f"in_{campo}", height=80)
-            with col_chk:
-                marcado_omitir = st.checkbox("Omitir", key=f"om_{campo}")
-            
-            datos_recolectados[campo] = "[OMITIDO]" if marcado_omitir else val_usuario
-            
-        boton_preparar = st.form_submit_button("🔨 Generar Archivo")
-
-    if boton_preparar:
-        documento_final = generar_documento(TEMPLATES[opcion], datos_recolectados, logo_subido)
+    with st.form("main_form"):
+        st.info("💡 Tip: Para tablas, separa los datos con comas. Ejemplo: Tarea, Juan, 25/Abril")
         
-        buffer = io.BytesIO()
-        documento_final.save(buffer)
-        buffer.seek(0)
+        campos = CAMPOS_MINUTA if opcion == "M100 Minuta" else [] # Aquí podrías añadir los de M102
         
-        st.success("✅ ¡Documento generado!")
-        st.download_button("📥 Descargar Word con Logo", buffer, f"Final_{opcion}.docx")
+        for c in campos:
+            st.markdown(f"**{c['label']}**")
+            col_in, col_om = st.columns([4, 1])
+            with col_in:
+                val = st.text_area("Contenido", key=f"in_{c['id']}", help=c.get("help", ""))
+            with col_om:
+                omit = st.checkbox("Omitir", key=f"om_{c['id']}")
+            datos_finales[c['id']] = "[OMITIDO]" if omit else val
+        
+        if st.form_submit_button("🔨 Preparar Minuta"):
+            doc_out = generar_documento(TEMPLATES[opcion], datos_finales, logo)
+            buffer = io.BytesIO()
+            doc_out.save(buffer)
+            buffer.seek(0)
+            st.success("✅ ¡Minuta lista!")
+            st.download_button("📥 Descargar Minuta Corregida", buffer, f"Minuta_{datos_finales.get('Fecha','')}.docx")
