@@ -3,24 +3,25 @@ from docx import Document
 import io
 import re
 
-# --- CONFIGURACIÓN ---
+# --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="CRM Pro - Generador", layout="wide")
 st.title("🚀 Generador de Documentos CRM")
 
+# Archivos base en tu repositorio
 TEMPLATES = {
     "M102 Gap Analysis": "M102_CRM_Gap_Analysis V2 (3).docx",
     "M100 Minuta": "M100_CRM_Minuta v2 (2).docx",
     "M101 Escenarios": "M101_CRM_Lista_de_escenarios_para_CRPUAT V2 (1).docx"
 }
 
-# Definición de campos por cada tipo de documento
+# Campos que la app preguntará según el template
 CAMPOS_CONFIG = {
     "M102 Gap Analysis": ["Fecha", "Objetivo", "Asistentes", "Módulos", "Pendientes"],
     "M100 Minuta": ["Fecha", "Objetivo", "Asistentes", "Puntos discutidos", "Acuerdos"],
     "M101 Escenarios": ["Fecha", "Objetivo", "Escenarios de prueba"]
 }
 
-def extraer_datos_base(file):
+def extraer_texto_base(file):
     doc = Document(file)
     texto = "\n".join([p.text for p in doc.paragraphs])
     for tabla in doc.tables:
@@ -32,19 +33,24 @@ def extraer_datos_base(file):
 def generar_documento(template_path, datos_finales):
     doc = Document(template_path)
     
-    # 1. Reemplazo de texto en párrafos
+    # 1. Reemplazo en párrafos
     for p in doc.paragraphs:
         for campo, valor in datos_finales.items():
-            if f"{campo}:" in p.text:
-                p.text = f"{campo}: {valor}"
+            etiqueta = f"{campo}:"
+            if etiqueta in p.text:
+                texto_sustituto = "" if valor == "[OMITIDO]" else valor
+                p.text = f"{etiqueta} {texto_sustituto}"
 
-    # 2. Lógica para la tabla de Asistentes (si el campo existe)
+    # 2. Lógica especial para tabla de Asistentes
     if "Asistentes" in datos_finales and datos_finales["Asistentes"] != "[OMITIDO]":
         asistentes = [a.strip() for a in datos_finales["Asistentes"].split('\n') if a.strip()]
         for tabla in doc.tables:
             if len(tabla.rows) > 0 and "Nombre" in tabla.cell(0, 0).text:
+                # Limpiar filas de ejemplo
                 while len(tabla.rows) > 1:
-                    tabla._tbl.remove(tabla.rows[-1]._tr)
+                    tr = tabla.rows[-1]._tr
+                    tabla._tbl.remove(tr)
+                # Insertar nuevos
                 for asis in asistentes:
                     nueva_fila = tabla.add_row().cells
                     partes = asis.split(',')
@@ -54,49 +60,47 @@ def generar_documento(template_path, datos_finales):
                 break
     return doc
 
-# --- INTERFAZ ---
-opcion = st.selectbox("1. Selecciona plantilla:", list(TEMPLATES.keys()))
-archivo_subido = st.file_uploader("2. Sube el archivo con información:", type=["docx"])
+# --- INTERFAZ DE USUARIO ---
+opcion = st.selectbox("1. Selecciona tu plantilla:", list(TEMPLATES.keys()))
+archivo_subido = st.file_uploader("2. Sube el archivo con la información nueva:", type=["docx"])
 
 if archivo_subido:
-    texto_extraido = extraer_datos_base(archivo_subido)
-    datos_para_procesar = {}
+    texto_fuente = extraer_texto_base(archivo_subido)
+    datos_recolectados = {}
     
-    st.subheader("3. Validar información campo por campo")
+    st.info("Valida la información de cada campo. Marca 'Omitir' si no deseas incluirlo.")
     
-    with st.form("form_detallado"):
+    with st.form("formulario_campos"):
         for campo in CAMPOS_CONFIG[opcion]:
-            st.markdown(f"**Configuración para: {campo}**")
-            col_input, col_check = st.columns([4, 1])
+            st.markdown(f"### Sección: {campo}")
+            col_txt, col_chk = st.columns([4, 1])
             
-            # Intento de pre-rellenado básico
-            busqueda = re.search(rf"{campo}:\s*(.*)", texto_extraido, re.I)
-            valor_default = busqueda.group(1).strip() if busqueda else ""
+            # Intento de encontrar el dato automáticamente
+            match = re.search(rf"{campo}:\s*(.*)", texto_fuente, re.I)
+            sugerencia = match.group(1).strip() if match else ""
             
-            with col_input:
-                # Usamos text_area para permitir varias líneas en campos como 'Objetivo'
-                texto_usuario = st.text_area(f"Contenido de {campo}", value=valor_default, key=f"txt_{campo}", height=100)
+            with col_txt:
+                val_usuario = st.text_area(f"Editar {campo}", value=sugerencia, key=f"input_{campo}")
+            with col_chk:
+                marcado_omitir = st.checkbox("Omitir", key=f"omitir_{campo}")
             
-            with col_check:
-                omitir = st.checkbox("Omitir", key=f"omit_{campo}")
+            datos_recolectados[campo] = "[OMITIDO]" if marcado_omitir else val_usuario
+            st.write("---")
             
-            datos_para_procesar[campo] = "[OMITIDO]" if omitir else texto_usuario
-            st.divider()
-            
-        procesar = st.form_submit_button("🔨 Preparar Documento Final")
+        boton_preparar = st.form_submit_button("🔨 Generar Archivo")
 
-    if procesar:
-        doc_final = generar_documento(TEMPLATES[opcion], datos_para_procesar)
+    # Botón de descarga (debe ir fuera del formulario)
+    if boton_preparar:
+        documento_final = generar_documento(TEMPLATES[opcion], datos_recolectados)
         
         buffer = io.BytesIO()
-        doc_final.save(buffer)
+        documento_final.save(buffer)
         buffer.seek(0)
         
-        st.success("✅ ¡Documento generado con las opciones seleccionadas!")
+        st.success("✅ ¡El documento ha sido generado con éxito!")
         st.download_button(
             label="📥 Descargar Word Final",
             data=buffer,
-            file_name=f"Final_{opcion.replace(' ', '_')}.docx",
+            file_name=f"Resultado_{opcion.replace(' ', '_')}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        )
         )
