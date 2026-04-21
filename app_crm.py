@@ -4,8 +4,9 @@ from docx.shared import Inches
 import io
 import re
 
-st.set_page_config(page_title="CRM Pro - Generador", layout="wide")
-st.title("🚀 Generador de Documentos CRM")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="CRM Document Generator v3", layout="wide")
+st.title("🚀 Generador CRM: Edición Profesional")
 
 TEMPLATES = {
     "M102 Gap Analysis": "M102_CRM_Gap_Analysis V2 (3).docx",
@@ -13,92 +14,125 @@ TEMPLATES = {
     "M101 Escenarios": "M101_CRM_Lista_de_escenarios_para_CRPUAT V2 (1).docx"
 }
 
-def rellenar_tabla_triple(tabla, texto_area):
-    """Lógica para tablas de 3 columnas: Tarea, Responsable, Fecha"""
+def limpiar_y_llenar_tabla(tabla, datos_lineas, columnas_esperadas=2):
+    """Borra filas de ejemplo y llena con datos nuevos."""
+    # Eliminar todas las filas excepto la cabecera (fila 0)
     while len(tabla.rows) > 1:
-        tabla._tbl.remove(tabla.rows[-1]._tr)
-    lineas = [l.strip() for l in texto_area.split('\n') if l.strip()]
-    for linea in lineas:
-        partes = linea.split(',')
+        row = tabla.rows[-1]
+        tabla._tbl.remove(row._tr)
+    
+    for linea in datos_lineas:
+        if not linea.strip(): continue
         nueva_fila = tabla.add_row().cells
-        nueva_fila[0].text = partes[0].strip() if len(partes) > 0 else ""
-        nueva_fila[1].text = partes[1].strip() if len(partes) > 1 else ""
-        nueva_fila[2].text = partes[2].strip() if len(partes) > 2 else ""
+        # Dividir por coma
+        partes = linea.split(',')
+        for i in range(min(len(partes), columnas_esperadas)):
+            nueva_fila[i].text = partes[i].strip()
 
-def generar_documento(template_path, datos, logo=None):
+def generar_word_final(template_path, data_dict, logo=None):
     doc = Document(template_path)
+    
+    # 1. LOGO
     if logo:
         try:
-            header_para = doc.sections[0].header.paragraphs[0]
-            header_para.alignment = 1
-            header_para.add_run().add_picture(logo, width=Inches(1.5))
+            header = doc.sections[0].header
+            p = header.paragraphs[0]
+            p.alignment = 1
+            p.add_run().add_picture(logo, width=Inches(1.2))
         except: pass
 
-    # 1. Reemplazo de Puntos Discutidos (Lista numerada)
-    puntos = [p.strip() for p in datos.get("Puntos", "").split('\n') if p.strip()]
-    idx = 0
-    for p in doc.paragraphs:
-        if re.match(r"^\d+\.", p.text.strip()) and idx < len(puntos):
-            p.text = f"{idx + 1}. {puntos[idx]}"
-            idx += 1
-        if "Fecha:" in p.text: p.text = f"Fecha: {datos.get('Fecha', '')}"
-        if "Objetivo:" in p.text: p.text = f"Objetivo: {datos.get('Objetivo', '')}"
+    # 2. REEMPLAZO DE TEXTO (EN TODO EL DOCUMENTO)
+    def reemplazar_en_texto(texto_original, clave, valor):
+        if valor == "[OMITIDO]": valor = ""
+        return texto_original.replace(f"{clave}:", f"{clave}: {valor}")
 
-    # 2. Manejo de Tablas
+    # En párrafos normales
+    for p in doc.paragraphs:
+        for clave in ["Fecha", "Objetivo"]:
+            if f"{clave}:" in p.text:
+                p.text = reemplazar_en_texto(p.text, clave, data_dict.get(clave, ""))
+
+    # En tablas (algunas plantillas tienen Fecha/Objetivo dentro de celdas)
     for tabla in doc.tables:
-        cabecera = tabla.cell(0, 0).text.lower()
-        if "nombre" in cabecera and "puesto" in cabecera:
-            while len(tabla.rows) > 1: tabla._tbl.remove(tabla.rows[-1]._tr)
-            for asis in datos.get("Asistentes", "").split('\n'):
-                if ',' in asis:
-                    nf = tabla.add_row().cells
-                    p = asis.split(',')
-                    nf[0].text, nf[1].text = p[0].strip(), p[1].strip()
-        elif "pendientes del cliente" in cabecera:
-            rellenar_tabla_triple(tabla, datos.get("PC", ""))
-        elif "pendientes mycloud" in cabecera:
-            rellenar_tabla_triple(tabla, datos.get("PM", ""))
+        for fila in tabla.rows:
+            for celda in fila.cells:
+                for clave in ["Fecha", "Objetivo"]:
+                    if f"{clave}:" in celda.text:
+                        celda.text = reemplazar_en_texto(celda.text, clave, data_dict.get(clave, ""))
+
+    # 3. LLENADO DE TABLAS ESPECÍFICAS
+    for tabla in doc.tables:
+        # Identificar por la primera celda
+        primera_celda = tabla.cell(0, 0).text.lower()
+        
+        if "nombre" in primera_celda and "puesto" in primera_celda:
+            if data_dict.get("Asistentes") != "[OMITIDO]":
+                limpiar_y_llenar_tabla(tabla, data_dict.get("Asistentes", "").split('\n'), 2)
+        
+        elif "pendientes del cliente" in primera_celda:
+            if data_dict.get("PC") != "[OMITIDO]":
+                limpiar_y_llenar_tabla(tabla, data_dict.get("PC", "").split('\n'), 3)
+                
+        elif "pendientes mycloud" in primera_celda:
+            if data_dict.get("PM") != "[OMITIDO]":
+                limpiar_y_llenar_tabla(tabla, data_dict.get("PM", "").split('\n'), 3)
+
+    # 4. PUNTOS DISCUTIDOS (Listas numeradas)
+    puntos = [p.strip() for p in data_dict.get("Puntos", "").split('\n') if p.strip()]
+    if puntos and data_dict.get("Puntos") != "[OMITIDO]":
+        idx = 0
+        for p in doc.paragraphs:
+            # Busca párrafos que empiecen con "1.", "2.", etc.
+            if re.match(r"^\d+\.", p.text.strip()) and idx < len(puntos):
+                p.text = f"{idx + 1}. {puntos[idx]}"
+                idx += 1
+
     return doc
 
 # --- INTERFAZ ---
-st.sidebar.header("🎨 Personalización")
-logo_file = st.sidebar.file_uploader("Logo Empresa", type=["png", "jpg"])
+st.sidebar.image("https://cdn-icons-png.flaticon.com/512/281/281760.png", width=50)
+logo_subido = st.sidebar.file_uploader("Opcional: Cargar Logo", type=["png", "jpg"])
 
-opcion = st.selectbox("Selecciona plantilla:", list(TEMPLATES.keys()))
-archivo = st.file_uploader("Sube el Word base:", type=["docx"])
+opcion = st.selectbox("1. Selecciona Plantilla", list(TEMPLATES.keys()))
+archivo_base = st.file_uploader("2. Sube el archivo de referencia", type=["docx"])
 
-if archivo:
-    # Usamos session_state para guardar el archivo generado y que no dé error de formulario
-    if 'archivo_listo' not in st.session_state:
-        st.session_state.archivo_listo = None
+if archivo_base:
+    # Contenedor para persistir el archivo generado
+    if 'file_bytes' not in st.session_state:
+        st.session_state.file_bytes = None
 
     with st.form("main_form"):
-        st.info("📝 Instrucciones: En tablas, separa con comas. Ejemplo: Tarea X, Juan Perez, 21/04/2026")
+        st.markdown("### 📝 Rellenar Información")
         col1, col2 = st.columns(2)
-        with col1:
-            f = st.text_input("Fecha")
-            obj = st.text_area("Objetivo")
-            puntos = st.text_area("Puntos discutidos (Uno por línea)")
-        with col2:
-            asis = st.text_area("Asistentes (Nombre, Puesto)")
-            pc = st.text_area("Pendientes Cliente (Tarea, Responsable, Fecha)")
-            pm = st.text_area("Pendientes Mycloud (Tarea, Responsable, Fecha)")
         
-        submitted = st.form_submit_button("🔨 Preparar Archivo")
+        with col1:
+            fecha = st.text_input("Fecha (ej: 21 de Abril 2026)")
+            objetivo = st.text_area("Objetivo de la sesión")
+            puntos = st.text_area("Puntos discutidos (Uno por línea)")
+        
+        with col2:
+            asis = st.text_area("Asistentes (Nombre, Puesto)", help="Ej: Juan Perez, Gerente")
+            pc = st.text_area("Pendientes Cliente (Tarea, Responsable, Fecha)", help="Ej: Entregar accesos, Maria, 25/04")
+            pm = st.text_area("Pendientes Mycloud (Tarea, Responsable, Fecha)", help="Ej: Configurar CRM, Oscar, 30/04")
+
+        submitted = st.form_submit_button("🔨 GENERAR DOCUMENTO")
         
         if submitted:
-            datos_finales = {"Fecha": f, "Objetivo": obj, "Puntos": puntos, "Asistentes": asis, "PC": pc, "PM": pm}
-            doc_gen = generar_documento(TEMPLATES[opcion], datos_finales, logo_file)
-            buffer = io.BytesIO()
-            doc_gen.save(buffer)
-            st.session_state.archivo_listo = buffer.getvalue()
+            datos = {"Fecha": fecha, "Objetivo": objetivo, "Puntos": puntos, "Asistentes": asis, "PC": pc, "PM": pm}
+            doc_final = generar_word_final(TEMPLATES[opcion], datos, logo_subido)
+            
+            output = io.BytesIO()
+            doc_final.save(output)
+            st.session_state.file_bytes = output.getvalue()
 
-    # EL BOTÓN DE DESCARGA SIEMPRE FUERA DEL FORMULARIO
-    if st.session_state.archivo_listo:
-        st.success("✅ ¡Documento preparado correctamente!")
+    # BOTÓN DE DESCARGA (Fuera del formulario para evitar errores)
+    if st.session_state.file_bytes:
+        st.divider()
+        st.balloons()
+        st.success("¡El archivo se procesó con éxito!")
         st.download_button(
-            label="📥 DESCARGAR ARCHIVO FINAL",
-            data=st.session_state.archivo_listo,
-            file_name=f"Final_{opcion.replace(' ','_')}.docx",
+            label="📥 DESCARGAR ARCHIVO AHORA",
+            data=st.session_state.file_bytes,
+            file_name=f"CRM_{opcion.replace(' ','_')}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
