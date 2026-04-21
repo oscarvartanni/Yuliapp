@@ -4,8 +4,7 @@ from docx.shared import Inches
 import io
 import re
 
-# --- CONFIGURACIÓN ---
-st.set_page_config(page_title="CRM Pro - Generador Experto", layout="wide")
+st.set_page_config(page_title="CRM Pro - Generador", layout="wide")
 st.title("🚀 Generador de Documentos CRM")
 
 TEMPLATES = {
@@ -14,22 +13,8 @@ TEMPLATES = {
     "M101 Escenarios": "M101_CRM_Lista_de_escenarios_para_CRPUAT V2 (1).docx"
 }
 
-# Configuración detallada para Minuta
-CAMPOS_MINUTA = [
-    {"id": "Fecha", "label": "Fecha de la reunión", "tipo": "text"},
-    {"id": "Objetivo", "label": "Objetivo de la sesión", "tipo": "area"},
-    {"id": "Asistentes", "label": "Asistentes (Formato: Nombre, Puesto - Uno por línea)", "tipo": "area", "help": "Ejemplo:\nOscar, Director\nYuliana, Project Manager"},
-    {"id": "Puntos discutidos", "label": "Puntos discutidos (Uno por línea)", "tipo": "area", "help": "Cada línea aparecerá en un numeral diferente."},
-    {"id": "Pendientes cliente", "label": "Pendientes del Cliente (Formato: Tarea, Responsable, Fecha)", "tipo": "area"},
-    {"id": "Pendientes Mycloud", "label": "Pendientes Mycloud (Formato: Tarea, Responsable, Fecha)", "tipo": "area"}
-]
-
-def extraer_texto_base(file):
-    doc = Document(file)
-    return "\n".join([p.text for p in doc.paragraphs] + [c.text for t in doc.tables for r in t.rows for c in r.cells])
-
 def rellenar_tabla_triple(tabla, texto_area):
-    """Lógica para tablas de 3 columnas (Pendientes, Responsable, Fecha)"""
+    """Lógica para tablas de 3 columnas: Tarea, Responsable, Fecha"""
     while len(tabla.rows) > 1:
         tabla._tbl.remove(tabla.rows[-1]._tr)
     lineas = [l.strip() for l in texto_area.split('\n') if l.strip()]
@@ -42,75 +27,78 @@ def rellenar_tabla_triple(tabla, texto_area):
 
 def generar_documento(template_path, datos, logo=None):
     doc = Document(template_path)
-    
     if logo:
-        header_para = doc.sections[0].header.paragraphs[0]
-        header_para.alignment = 1
-        header_para.add_run().add_picture(logo, width=Inches(1.5))
+        try:
+            header_para = doc.sections[0].header.paragraphs[0]
+            header_para.alignment = 1
+            header_para.add_run().add_picture(logo, width=Inches(1.5))
+        except: pass
 
-    # Reemplazo de Puntos Discutidos en los numerales 1, 2, 3...
-    puntos = [p.strip() for p in datos.get("Puntos discutidos", "").split('\n') if p.strip()]
-    idx_punto = 0
+    # 1. Reemplazo de Puntos Discutidos (Lista numerada)
+    puntos = [p.strip() for p in datos.get("Puntos", "").split('\n') if p.strip()]
+    idx = 0
     for p in doc.paragraphs:
-        # Buscamos los párrafos que tienen los números de la lista
-        if re.match(r"^\d+\.", p.text.strip()) and idx_punto < len(puntos):
-            p.text = f"{idx_punto + 1}. {puntos[idx_punto]}"
-            idx_punto += 1
-        # Reemplazo estándar de Fecha y Objetivo
-        for campo in ["Fecha", "Objetivo"]:
-            if f"{campo}:" in p.text:
-                p.text = f"{campo}: {datos.get(campo, '')}" if datos.get(campo) != "[OMITIDO]" else f"{campo}:"
+        if re.match(r"^\d+\.", p.text.strip()) and idx < len(puntos):
+            p.text = f"{idx + 1}. {puntos[idx]}"
+            idx += 1
+        if "Fecha:" in p.text: p.text = f"Fecha: {datos.get('Fecha', '')}"
+        if "Objetivo:" in p.text: p.text = f"Objetivo: {datos.get('Objetivo', '')}"
 
-    # Manejo de tablas
+    # 2. Manejo de Tablas
     for tabla in doc.tables:
         cabecera = tabla.cell(0, 0).text.lower()
-        # 1. Tabla Asistentes
         if "nombre" in cabecera and "puesto" in cabecera:
-            if datos.get("Asistentes") != "[OMITIDO]":
-                while len(tabla.rows) > 1: tabla._tbl.remove(tabla.rows[-1]._tr)
-                for asis in datos.get("Asistentes", "").split('\n'):
-                    if ',' in asis:
-                        nf = tabla.add_row().cells
-                        p = asis.split(',')
-                        nf[0].text, nf[1].text = p[0].strip(), p[1].strip()
-        
-        # 2. Tablas de Pendientes
+            while len(tabla.rows) > 1: tabla._tbl.remove(tabla.rows[-1]._tr)
+            for asis in datos.get("Asistentes", "").split('\n'):
+                if ',' in asis:
+                    nf = tabla.add_row().cells
+                    p = asis.split(',')
+                    nf[0].text, nf[1].text = p[0].strip(), p[1].strip()
         elif "pendientes del cliente" in cabecera:
-            rellenar_tabla_triple(tabla, datos.get("Pendientes cliente", ""))
+            rellenar_tabla_triple(tabla, datos.get("PC", ""))
         elif "pendientes mycloud" in cabecera:
-            rellenar_tabla_triple(tabla, datos.get("Pendientes Mycloud", ""))
-            
+            rellenar_tabla_triple(tabla, datos.get("PM", ""))
     return doc
 
 # --- INTERFAZ ---
 st.sidebar.header("🎨 Personalización")
-logo = st.sidebar.file_uploader("Logo de la empresa", type=["png", "jpg"])
+logo_file = st.sidebar.file_uploader("Logo Empresa", type=["png", "jpg"])
 
 opcion = st.selectbox("Selecciona plantilla:", list(TEMPLATES.keys()))
-archivo = st.file_uploader("Sube el Word con la info:", type=["docx"])
+archivo = st.file_uploader("Sube el Word base:", type=["docx"])
 
 if archivo:
-    texto_base = extraer_texto_base(archivo)
-    datos_finales = {}
-    
+    # Usamos session_state para guardar el archivo generado y que no dé error de formulario
+    if 'archivo_listo' not in st.session_state:
+        st.session_state.archivo_listo = None
+
     with st.form("main_form"):
-        st.info("💡 Tip: Para tablas, separa los datos con comas. Ejemplo: Tarea, Juan, 25/Abril")
+        st.info("📝 Instrucciones: En tablas, separa con comas. Ejemplo: Tarea X, Juan Perez, 21/04/2026")
+        col1, col2 = st.columns(2)
+        with col1:
+            f = st.text_input("Fecha")
+            obj = st.text_area("Objetivo")
+            puntos = st.text_area("Puntos discutidos (Uno por línea)")
+        with col2:
+            asis = st.text_area("Asistentes (Nombre, Puesto)")
+            pc = st.text_area("Pendientes Cliente (Tarea, Responsable, Fecha)")
+            pm = st.text_area("Pendientes Mycloud (Tarea, Responsable, Fecha)")
         
-        campos = CAMPOS_MINUTA if opcion == "M100 Minuta" else [] # Aquí podrías añadir los de M102
+        submitted = st.form_submit_button("🔨 Preparar Archivo")
         
-        for c in campos:
-            st.markdown(f"**{c['label']}**")
-            col_in, col_om = st.columns([4, 1])
-            with col_in:
-                val = st.text_area("Contenido", key=f"in_{c['id']}", help=c.get("help", ""))
-            with col_om:
-                omit = st.checkbox("Omitir", key=f"om_{c['id']}")
-            datos_finales[c['id']] = "[OMITIDO]" if omit else val
-        
-        if st.form_submit_button("🔨 Preparar Minuta"):
-            doc_out = generar_documento(TEMPLATES[opcion], datos_finales, logo)
+        if submitted:
+            datos_finales = {"Fecha": f, "Objetivo": obj, "Puntos": puntos, "Asistentes": asis, "PC": pc, "PM": pm}
+            doc_gen = generar_documento(TEMPLATES[opcion], datos_finales, logo_file)
             buffer = io.BytesIO()
-            doc_out.save(buffer)
-            buffer.seek(0)
-            st.success("✅ ¡Minuta lista!")
-            st.download_button("📥 Descargar Minuta Corregida", buffer, f"Minuta_{datos_finales.get('Fecha','')}.docx")
+            doc_gen.save(buffer)
+            st.session_state.archivo_listo = buffer.getvalue()
+
+    # EL BOTÓN DE DESCARGA SIEMPRE FUERA DEL FORMULARIO
+    if st.session_state.archivo_listo:
+        st.success("✅ ¡Documento preparado correctamente!")
+        st.download_button(
+            label="📥 DESCARGAR ARCHIVO FINAL",
+            data=st.session_state.archivo_listo,
+            file_name=f"Final_{opcion.replace(' ','_')}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
