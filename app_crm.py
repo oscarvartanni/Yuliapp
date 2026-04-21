@@ -7,6 +7,7 @@ import re
 st.set_page_config(page_title="CRM Pro - Generador", layout="wide")
 st.title("🚀 Generador de Documentos CRM")
 
+# Nombres de tus archivos en GitHub
 TEMPLATES = {
     "M102 Gap Analysis": "M102_CRM_Gap_Analysis V2 (3).docx",
     "M100 Minuta": "M100_CRM_Minuta v2 (2).docx",
@@ -35,8 +36,8 @@ def generar_documento(template_path, fecha, objetivo, asistentes_texto):
     # Manejo de tabla de asistentes (Nombre, Puesto)
     asistentes = [a.strip() for a in asistentes_texto.split('\n') if a.strip()]
     for tabla in doc.tables:
-        # Detectamos la tabla de asistentes por sus encabezados
-        if "Nombre" in tabla.cell(0, 0).text and "Puesto" in tabla.cell(0, 1).text:
+        # Detectamos la tabla de asistentes por sus encabezados [cite: 5, 25]
+        if len(tabla.rows) > 0 and "Nombre" in tabla.cell(0, 0).text:
             # Borrar filas de ejemplo (excepto la cabecera)
             while len(tabla.rows) > 1:
                 tr = tabla.rows[-1]._tr
@@ -58,7 +59,6 @@ archivo_subido = st.file_uploader("Sube el archivo con información:", type=["do
 if archivo_subido:
     info = extraer_datos_base(archivo_subido)
     
-    # Iniciamos el formulario
     with st.form("form_datos"):
         col1, col2 = st.columns(2)
         with col1:
@@ -67,10 +67,9 @@ if archivo_subido:
         with col2:
             asis_val = st.text_area("Asistentes (Nombre, Puesto separados por coma):")
         
-        # El botón de submit del formulario NO puede ser de descarga
         procesar = st.form_submit_button("Preparar Documento")
 
-    # FUERA DEL FORMULARIO: Mostramos la descarga si se hizo clic en procesar
+    # AQUÍ ESTABA EL ERROR: Ahora el espaciado es correcto y está fuera del 'with st.form'
     if procesar:
         doc_final = generar_documento(TEMPLATES[opcion], f_val, o_val, asis_val)
         
@@ -85,4 +84,3 @@ if archivo_subido:
             file_name=f"Final_{opcion.replace(' ', '_')}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
-            st.download_button("Descargar Word", target, file_name=f"Final_{opcion}.docx")
