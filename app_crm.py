@@ -7,33 +7,37 @@ import re
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="CRM Generator Pro", layout="wide")
 
+# --- INSERTAR LOGO EN LA WEB ---
+# Mostramos el logo de Yuliana Muñoz en la parte superior de la barra lateral
+st.sidebar.image("https://r2.community.samsung.com/t5/image/serverpage/image-id/5319983i8E8C0A97E9C9F9A1/image-size/large?v=v2&px=999", use_container_width=True)
+
 TEMPLATES = {
     "M100 Minuta": "M100_CRM_Minuta v2 (2).docx",
     "M102 Gap Analysis": "M102_CRM_Gap_Analysis V2 (3).docx",
     "M101 Escenarios": "M101_CRM_Lista_de_escenarios_para_CRPUAT V2 (1).docx"
 }
 
-# Configuración de campos y ejemplos específicos
+# Configuración de campos y ejemplos específicos (Placeholders)
 CONFIG_DETALLADA = {
     "M100 Minuta": {
         "Fecha": "21 de Abril 2026",
         "Objetivo": "Definir alcances del módulo de ventas",
         "Asistentes": "Juan Perez, Gerente\nMaria Garcia, Consultora",
         "Puntos Discutidos": "Revisión de tiempos\nValidación de campos",
-        "Pendientes Cliente": "Enviar accesos, Juan Perez, 25/04",
-        "Pendientes Mycloud": "Configurar portal, Oscar V., 30/04"
+        "Pendientes Cliente": "Tarea, Responsable, Fecha",
+        "Pendientes Mycloud": "Tarea, Responsable, Fecha"
     },
     "M102 Gap Analysis": {
         "Fecha": "21 de Abril 2026",
         "Objetivo": "Análisis de brechas técnica vs funcional",
         "Asistentes": "Luis Pascal, Dirección\nAlejandro Chávez, Implementación",
         "Módulos": "Ventas, Prospectos, Nuevo Campo, En proceso",
-        "Pendientes General": "Revisión de API, Dev Team, 05/05/2026"
+        "Pendientes General": "Tarea, Responsable, Fecha"
     },
     "M101 Escenarios": {
         "Fecha": "21 de Abril 2026",
         "Objetivo": "Pruebas de aceptación de usuario (UAT)",
-        "Escenarios": "Descripción del escenario, Módulos, Responsable"
+        "Escenarios de Prueba": "Descripción del escenario, Módulos, Responsable"
     }
 }
 
@@ -71,9 +75,7 @@ def rellenar_tabla_escenarios(tabla, texto_lineas):
         if not linea.strip(): continue
         nueva_fila = tabla.add_row().cells
         partes = linea.split(',')
-        # Columna 0: Auto-número
         nueva_fila[0].text = str(idx + 1)
-        # Columnas 1, 2, 3: Datos del usuario
         for i in range(min(len(partes), 3)):
             nueva_fila[i+1].text = partes[i].strip()
 
@@ -87,19 +89,14 @@ def procesar_word(template_name, datos_usuario, logo_img=None):
             p.add_run().add_picture(logo_img, width=Inches(1.2))
         except: pass
 
-    # Reemplazo de texto base
     for p in doc.paragraphs:
         if "Fecha:" in p.text: p.text = f"Fecha: {datos_usuario.get('Fecha', '')}"
         if "Objetivo:" in p.text: p.text = f"Objetivo: {datos_usuario.get('Objetivo', '')}"
 
     for tabla in doc.tables:
         cabecera = tabla.cell(0,0).text.lower()
-        
-        # 1. Caso M101: Escenarios (Tabla de 4 columnas)
         if "no." in cabecera or "escenario" in cabecera:
-            rellenar_tabla_escenarios(tabla, datos_usuario.get("Escenarios", ""))
-        
-        # 2. Otros casos de tablas
+            rellenar_tabla_escenarios(tabla, datos_usuario.get("Escenarios de Prueba", ""))
         elif "nombre" in cabecera:
             rellenar_tabla_estandar(tabla, datos_usuario.get("Asistentes", ""), 2)
         elif "pendientes del cliente" in cabecera:
@@ -117,14 +114,14 @@ st.title("🚀 Generador CRM Profesional")
 with st.sidebar:
     st.header("Configuración")
     opcion = st.selectbox("Plantilla:", list(TEMPLATES.keys()), key="selector_doc")
-    logo = st.file_uploader("Logo:", type=["png", "jpg"])
+    logo_doc = st.file_uploader("Logo para el Documento:", type=["png", "jpg"])
     st.divider()
-    st.info("💡 Para tablas, separa por comas:\nDescripción, Módulo, Responsable")
+    st.info("💡 Tip: Para las tablas, separa los datos por comas.")
 
-archivo_ref = st.file_uploader("Archivo de referencia:", type=["docx"])
+archivo_ref = st.file_uploader("Sube archivo de referencia (opcional):", type=["docx"])
 datos_extraidos = extraer_informacion(archivo_ref)
 
-with st.form(key=f"form_{opcion}"):
+with st.form(key=f"form_v65_{opcion}"):
     st.subheader(f"Editando: {opcion}")
     config = CONFIG_DETALLADA[opcion]
     datos_finales = {}
@@ -137,15 +134,14 @@ with st.form(key=f"form_{opcion}"):
             if campo == "Fecha":
                 datos_finales[campo] = st.text_input(campo, value=val_init, placeholder=placeholder)
             else:
-                # Ayuda visual para Escenarios
-                help_text = "Escribe: Descripción, Módulo, Responsable (uno por línea)" if campo == "Escenarios" else ""
-                datos_finales[campo] = st.text_area(campo, value=val_init, placeholder=f"Ej: {placeholder}", help=help_text, height=150)
+                datos_finales[campo] = st.text_area(campo, value=val_init, placeholder=f"Ej: {placeholder}", height=150)
     
     btn = st.form_submit_button("🔨 GENERAR")
 
 if btn:
-    doc_final = procesar_word(opcion, datos_finales, logo)
-    buf = io.BytesIO()
-    doc_final.save(buf)
-    st.success("✅ ¡Archivo generado!")
-    st.download_button("📥 Descargar Word", buf.getvalue(), file_name=f"{opcion}.docx")
+    with st.spinner("Generando..."):
+        doc_final = procesar_word(opcion, datos_finales, logo_doc)
+        buf = io.BytesIO()
+        doc_final.save(buf)
+        st.success("✅ ¡Archivo generado!")
+        st.download_button("📥 Descargar Word", buf.getvalue(), file_name=f"{opcion}.docx")
