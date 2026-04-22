@@ -7,17 +7,28 @@ import re
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="CRM Generator Pro", layout="wide")
 
-# --- INSERTAR LOGO EN LA WEB ---
-# Mostramos el logo de Yuliana Muñoz en la parte superior de la barra lateral
-st.sidebar.image("https://r2.community.samsung.com/t5/image/serverpage/image-id/5319983i8E8C0A97E9C9F9A1/image-size/large?v=v2&px=999", use_container_width=True)
+# --- BARRA LATERAL (LOGO Y CONFIG) ---
+with st.sidebar:
+    # Espacio para el logo de la aplicación
+    st.header("Identidad Visual")
+    logo_web = st.file_uploader("1. Sube el logo para la WEB (Yuliana Muñoz):", type=["png", "jpg", "jpeg"], key="logo_web")
+    
+    if logo_web:
+        st.image(logo_web, use_container_width=True)
+    
+    st.divider()
+    st.header("2. Configuración")
+    opcion = st.selectbox("Selecciona la Plantilla:", ["M100 Minuta", "M102 Gap Analysis", "M101 Escenarios"], key="selector_doc")
+    logo_doc = st.file_uploader("3. Logo para el DOCUMENTO Word:", type=["png", "jpg"], key="logo_doc")
+    st.info("💡 Tip: Para las tablas, separa los datos por comas.")
 
+# --- DICCIONARIOS DE CONFIGURACIÓN ---
 TEMPLATES = {
     "M100 Minuta": "M100_CRM_Minuta v2 (2).docx",
     "M102 Gap Analysis": "M102_CRM_Gap_Analysis V2 (3).docx",
     "M101 Escenarios": "M101_CRM_Lista_de_escenarios_para_CRPUAT V2 (1).docx"
 }
 
-# Configuración de campos y ejemplos específicos (Placeholders)
 CONFIG_DETALLADA = {
     "M100 Minuta": {
         "Fecha": "21 de Abril 2026",
@@ -41,6 +52,7 @@ CONFIG_DETALLADA = {
     }
 }
 
+# --- FUNCIONES DE PROCESAMIENTO ---
 def extraer_informacion(archivo_subido):
     datos = {"Fecha": "", "Objetivo": ""}
     if archivo_subido:
@@ -68,7 +80,6 @@ def rellenar_tabla_estandar(tabla, texto_lineas, columnas):
             nueva_fila[i].text = partes[i].strip()
 
 def rellenar_tabla_escenarios(tabla, texto_lineas):
-    """Especial para M101: 4 columnas (No, Descripción, Módulos, Responsable)"""
     while len(tabla.rows) > 1:
         tabla._tbl.remove(tabla.rows[-1]._tr)
     for idx, linea in enumerate(texto_lineas.split('\n')):
@@ -81,18 +92,15 @@ def rellenar_tabla_escenarios(tabla, texto_lineas):
 
 def procesar_word(template_name, datos_usuario, logo_img=None):
     doc = Document(TEMPLATES[template_name])
-    
     if logo_img:
         try:
             header = doc.sections[0].header
             p = header.paragraphs[0]
             p.add_run().add_picture(logo_img, width=Inches(1.2))
         except: pass
-
     for p in doc.paragraphs:
         if "Fecha:" in p.text: p.text = f"Fecha: {datos_usuario.get('Fecha', '')}"
         if "Objetivo:" in p.text: p.text = f"Objetivo: {datos_usuario.get('Objetivo', '')}"
-
     for tabla in doc.tables:
         cabecera = tabla.cell(0,0).text.lower()
         if "no." in cabecera or "escenario" in cabecera:
@@ -105,18 +113,10 @@ def procesar_word(template_name, datos_usuario, logo_img=None):
             rellenar_tabla_estandar(tabla, datos_usuario.get("Pendientes Mycloud", ""), 3)
         elif "módulo" in cabecera:
             rellenar_tabla_estandar(tabla, datos_usuario.get("Módulos", ""), 4)
-
     return doc
 
-# --- INTERFAZ ---
+# --- INTERFAZ PRINCIPAL ---
 st.title("🚀 Generador CRM Profesional")
-
-with st.sidebar:
-    st.header("Configuración")
-    opcion = st.selectbox("Plantilla:", list(TEMPLATES.keys()), key="selector_doc")
-    logo_doc = st.file_uploader("Logo para el Documento:", type=["png", "jpg"])
-    st.divider()
-    st.info("💡 Tip: Para las tablas, separa los datos por comas.")
 
 archivo_ref = st.file_uploader("Sube archivo de referencia (opcional):", type=["docx"])
 datos_extraidos = extraer_informacion(archivo_ref)
