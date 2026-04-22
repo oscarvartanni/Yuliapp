@@ -83,9 +83,23 @@ def rellenar_tabla_escenarios(tabla, texto_lineas):
 
 def procesar_word(template_name, datos_usuario):
     doc = Document(TEMPLATES[template_name])
+    
+    # REEMPLAZO DE TEXTO EN PÁRRAFOS
     for p in doc.paragraphs:
-        if "Fecha:" in p.text: p.text = f"Fecha: {datos_usuario.get('Fecha', '')}"
-        if "Objetivo:" in p.text: p.text = f"Objetivo: {datos_usuario.get('Objetivo', '')}"
+        texto_parrafo = p.text.lower()
+        
+        if "fecha:" in texto_parrafo:
+            p.text = f"Fecha: {datos_usuario.get('Fecha', '')}"
+        elif "objetivo:" in texto_parrafo:
+            p.text = f"Objetivo: {datos_usuario.get('Objetivo', '')}"
+        elif "puntos discutidos:" in texto_parrafo:
+            # AQUÍ ESTÁ EL FIX: Ahora sí reemplaza los puntos discutidos
+            p.text = f"Puntos discutidos: {datos_usuario.get('Puntos Discutidos', '')}"
+        elif "asistentes:" in texto_parrafo:
+            # Opcional: llena el texto de asistentes si existe el campo
+            p.text = f"Asistentes: {datos_usuario.get('Asistentes', '').replace('\\n', ', ')}"
+
+    # REEMPLAZO DE TEXTO EN TABLAS
     for tabla in doc.tables:
         cabecera = tabla.cell(0,0).text.lower()
         if "no." in cabecera or "escenario" in cabecera:
@@ -98,6 +112,7 @@ def procesar_word(template_name, datos_usuario):
             rellenar_tabla_estandar(tabla, datos_usuario.get("Pendientes Mycloud", ""), 3)
         elif "módulo" in cabecera:
             rellenar_tabla_estandar(tabla, datos_usuario.get("Módulos", ""), 4)
+
     return doc
 
 # --- INTERFAZ ---
@@ -111,7 +126,6 @@ with st.sidebar:
 archivo_ref = st.file_uploader("Sube archivo de referencia (opcional):", type=["docx"])
 datos_auto = extraer_informacion(archivo_ref)
 
-# 1. EL FORMULARIO (Solo para entrada de datos)
 with st.form(key=f"f_{opcion}"):
     st.subheader(f"Campos para {opcion}")
     config = CONFIG_DETALLADA[opcion]
@@ -127,10 +141,8 @@ with st.form(key=f"f_{opcion}"):
             else:
                 datos_finales[campo] = st.text_area(campo, value=val_i, placeholder=f"Ej: {placeholder}", height=150)
     
-    # El botón de enviar debe estar dentro
     enviado = st.form_submit_button("🔨 GENERAR DOCUMENTO")
 
-# 2. LA LÓGICA DE DESCARGA (Fuera del formulario)
 if enviado:
     with st.spinner("Procesando documento..."):
         try:
@@ -140,7 +152,6 @@ if enviado:
             byte_content = buf.getvalue()
             
             st.success("✅ ¡Archivo generado con éxito!")
-            # El botón de descarga ahora está fuera y funcionará sin errores
             st.download_button(
                 label="📥 Click aquí para descargar Word",
                 data=byte_content,
@@ -148,4 +159,4 @@ if enviado:
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
         except Exception as e:
-            st.error(f"Hubo un error al generar el archivo: {e}")
+            st.error(f"Error: {e}. Asegúrate de que el nombre de la plantilla en GitHub sea exacto.")
