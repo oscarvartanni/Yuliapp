@@ -1,28 +1,21 @@
 import streamlit as st
 from docx import Document
-from docx.shared import Inches
 import io
 import re
+import os
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="CRM Generator Pro", layout="wide")
 
-# --- BARRA LATERAL (LOGO Y CONFIG) ---
-with st.sidebar:
-    # Espacio para el logo de la aplicación
-    st.header("Identidad Visual")
-    logo_web = st.file_uploader("1. Sube el logo para la WEB (Yuliana Muñoz):", type=["png", "jpg", "jpeg"], key="logo_web")
-    
-    if logo_web:
-        st.image(logo_web, use_container_width=True)
-    
-    st.divider()
-    st.header("2. Configuración")
-    opcion = st.selectbox("Selecciona la Plantilla:", ["M100 Minuta", "M102 Gap Analysis", "M101 Escenarios"], key="selector_doc")
-    logo_doc = st.file_uploader("3. Logo para el DOCUMENTO Word:", type=["png", "jpg"], key="logo_doc")
-    st.info("💡 Tip: Para las tablas, separa los datos por comas.")
+# --- LOGO EN LA WEB ---
+# Esto busca el archivo 'logo.png' en tu repositorio y lo pone arriba a la izquierda
+if os.path.exists("logo.png"):
+    st.sidebar.image("logo.png", use_container_width=True)
+else:
+    st.sidebar.warning("⚠️ Sube 'logo.png' a GitHub")
 
-# --- DICCIONARIOS DE CONFIGURACIÓN ---
+st.sidebar.title("Configuración")
+
 TEMPLATES = {
     "M100 Minuta": "M100_CRM_Minuta v2 (2).docx",
     "M102 Gap Analysis": "M102_CRM_Gap_Analysis V2 (3).docx",
@@ -52,7 +45,6 @@ CONFIG_DETALLADA = {
     }
 }
 
-# --- FUNCIONES DE PROCESAMIENTO ---
 def extraer_informacion(archivo_subido):
     datos = {"Fecha": "", "Objetivo": ""}
     if archivo_subido:
@@ -90,17 +82,14 @@ def rellenar_tabla_escenarios(tabla, texto_lineas):
         for i in range(min(len(partes), 3)):
             nueva_fila[i+1].text = partes[i].strip()
 
-def procesar_word(template_name, datos_usuario, logo_img=None):
+def procesar_word(template_name, datos_usuario):
+    # Se eliminó toda la lógica de inserción de imagen/logo en el Word
     doc = Document(TEMPLATES[template_name])
-    if logo_img:
-        try:
-            header = doc.sections[0].header
-            p = header.paragraphs[0]
-            p.add_run().add_picture(logo_img, width=Inches(1.2))
-        except: pass
+    
     for p in doc.paragraphs:
         if "Fecha:" in p.text: p.text = f"Fecha: {datos_usuario.get('Fecha', '')}"
         if "Objetivo:" in p.text: p.text = f"Objetivo: {datos_usuario.get('Objetivo', '')}"
+
     for tabla in doc.tables:
         cabecera = tabla.cell(0,0).text.lower()
         if "no." in cabecera or "escenario" in cabecera:
@@ -113,16 +102,22 @@ def procesar_word(template_name, datos_usuario, logo_img=None):
             rellenar_tabla_estandar(tabla, datos_usuario.get("Pendientes Mycloud", ""), 3)
         elif "módulo" in cabecera:
             rellenar_tabla_estandar(tabla, datos_usuario.get("Módulos", ""), 4)
+
     return doc
 
-# --- INTERFAZ PRINCIPAL ---
+# --- INTERFAZ ---
 st.title("🚀 Generador CRM Profesional")
 
-archivo_ref = st.file_uploader("Sube archivo de referencia (opcional):", type=["docx"])
-datos_extraidos = extraer_informacion(archivo_ref)
+with st.sidebar:
+    opcion = st.selectbox("Selecciona Plantilla:", list(TEMPLATES.keys()), key="selector_doc")
+    st.divider()
+    st.info("💡 Tip: Para las tablas, separa los datos por comas.")
 
-with st.form(key=f"form_v65_{opcion}"):
-    st.subheader(f"Editando: {opcion}")
+archivo_ref = st.file_uploader("Sube archivo de referencia (opcional):", type=["docx"])
+datos_auto = extraer_informacion(archivo_ref)
+
+with st.form(key=f"f_{opcion}"):
+    st.subheader(f"Campos para {opcion}")
     config = CONFIG_DETALLADA[opcion]
     datos_finales = {}
     
@@ -130,18 +125,15 @@ with st.form(key=f"form_v65_{opcion}"):
     for i, (campo, placeholder) in enumerate(config.items()):
         target_col = col1 if i % 2 == 0 else col2
         with target_col:
-            val_init = datos_extraidos.get(campo, "") if campo in ["Fecha", "Objetivo"] else ""
+            val_i = datos_auto.get(campo, "") if campo in ["Fecha", "Objetivo"] else ""
             if campo == "Fecha":
-                datos_finales[campo] = st.text_input(campo, value=val_init, placeholder=placeholder)
+                datos_finales[campo] = st.text_input(campo, value=val_i, placeholder=placeholder)
             else:
-                datos_finales[campo] = st.text_area(campo, value=val_init, placeholder=f"Ej: {placeholder}", height=150)
+                datos_finales[campo] = st.text_area(campo, value=val_i, placeholder=f"Ej: {placeholder}", height=150)
     
-    btn = st.form_submit_button("🔨 GENERAR")
-
-if btn:
-    with st.spinner("Generando..."):
-        doc_final = procesar_word(opcion, datos_finales, logo_doc)
+    if st.form_submit_button("🔨 GENERAR DOCUMENTO"):
+        doc_res = procesar_word(opcion, datos_finales)
         buf = io.BytesIO()
-        doc_final.save(buf)
+        doc_res.save(buf)
         st.success("✅ ¡Archivo generado!")
         st.download_button("📥 Descargar Word", buf.getvalue(), file_name=f"{opcion}.docx")
