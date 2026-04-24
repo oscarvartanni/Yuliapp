@@ -10,6 +10,7 @@ import os
 st.set_page_config(page_title="CRM Generator Pro", layout="wide")
 
 # --- 2. DEFINICIÓN DE PLANTILLAS ---
+# Asegúrate de que estos nombres de archivo coincidan exactamente con los que tienes en GitHub
 TEMPLATES = {
     "M100 Minuta": "M100_CRM_Minuta v2 (2).docx",
     "M102 Gap Analysis": "M102_CRM_Gap_Analysis V2 (3).docx",
@@ -18,7 +19,7 @@ TEMPLATES = {
 
 # --- 3. FUNCIONES DE EXTRACCIÓN E IDENTIDAD ---
 def aplicar_poppins(run, size=11):
-    """Define explícitamente la fuente Poppins para el texto insertado."""
+    """Define la fuente Poppins para el texto insertado."""
     run.font.name = 'Poppins'
     run.font.size = Pt(size)
 
@@ -33,7 +34,8 @@ def iterar_bloques(parent):
 
 def extraer_informacion(archivo_subido):
     datos = {k: "" for k in ["Fecha", "Objetivo", "Asistentes", "Puntos Discutidos", "Pendientes Cliente", "Pendientes Mycloud"]}
-    if not archivo_subido: return datos
+    if not archivo_subido: 
+        return datos
     
     try:
         doc = Document(archivo_subido)
@@ -62,8 +64,7 @@ def extraer_informacion(archivo_subido):
                 datos[contexto_actual] = "\n".join(f for f in filas if f)
                 
     except Exception as e:
-        # Mejora de la revisión: Manejo de errores visual para el usuario
-        st.warning(f"⚠️ No se pudo extraer la información del archivo de referencia. Detalles: {e}")
+        st.warning(f"⚠️ No se pudo extraer información: {e}")
         
     return datos
 
@@ -77,29 +78,25 @@ def rellenar_tabla(tabla, texto_lineas, columnas):
         partes = linea.split(',')
         for i in range(min(len(partes), columnas)):
             nueva_fila[i].text = partes[i].strip()
-            # Aplicar Poppins a cada celda nueva
             for p in nueva_fila[i].paragraphs:
-                for run in p.runs: aplicar_poppins(run)
+                for run in p.runs: 
+                    aplicar_poppins(run)
 
 def procesar_word(template_path, datos_usuario):
     doc = Document(template_path)
     
     for p in doc.paragraphs:
-        # Formato para Fecha y Objetivo con Poppins
         if "Fecha:" in p.text:
             p.text = "Fecha: "
             aplicar_poppins(p.add_run(datos_usuario['Fecha']))
         elif "Objetivo:" in p.text:
             p.text = "Objetivo: "
             aplicar_poppins(p.add_run(datos_usuario['Objetivo']))
-        
-        # Lógica de NUMERACIÓN CONSECUTIVA para Puntos Discutidos
         elif "Puntos discutidos:" in p.text:
             p.text = "Puntos discutidos:"
             lineas = datos_usuario['Puntos Discutidos'].split('\n')
             for i, linea in enumerate(lineas, 1):
                 if linea.strip():
-                    # Insertar párrafo con formato de lista numerada
                     nuevo_p = p.insert_paragraph_before(f"{i}. {linea.strip()}")
                     aplicar_poppins(nuevo_p.runs[0] if nuevo_p.runs else nuevo_p.add_run())
     
@@ -119,16 +116,12 @@ st.title("🚀 Generador CRM Profesional")
 
 with st.sidebar:
     st.header("Identidad Visual")
-    
-    # Lógica de logo corregida sin key
-    logo_web = st.file_uploader("1. Sube el logo para la WEB:", type=["png", "jpg", "jpeg"])
+    logo_web = st.file_uploader("1. Sube el logo:", type=["png", "jpg", "jpeg"])
     
     if logo_web is not None: 
         st.image(logo_web, use_container_width=True)
     elif os.path.exists("logo.png"):
         st.image("logo.png", use_container_width=True)
-    else:
-        st.info("💡 Sube un logo para personalizar la barra lateral.")
         
     st.divider()
     opcion = st.selectbox("Selecciona la Plantilla:", list(TEMPLATES.keys()))
@@ -136,6 +129,7 @@ with st.sidebar:
 archivo_ref = st.file_uploader("📂 Sube archivo de referencia (opcional):", type=["docx"])
 datos_auto = extraer_informacion(archivo_ref)
 
+# FORMULARIO CORREGIDO
 with st.form(key="form_crm"):
     st.subheader(f"Editando: {opcion}")
     c1, c2 = st.columns(2)
@@ -145,11 +139,31 @@ with st.form(key="form_crm"):
         p_cliente = st.text_area("Pendientes Cliente", value=datos_auto["Pendientes Cliente"], height=150)
     with c2:
         objetivo = st.text_area("Objetivo", value=datos_auto["Objetivo"], height=68)
-        puntos = st.text_area("Puntos Discutidos (un punto por línea)", value=datos_auto["Puntos Discutidos"], height=150)
+        puntos = st.text_area("Puntos Discutidos", value=datos_auto["Puntos Discutidos"], height=150)
         p_mycloud = st.text_area("Pendientes Mycloud", value=datos_auto["Pendientes Mycloud"], height=150)
     
     submit = st.form_submit_button("🔨 GENERAR DOCUMENTO")
 
 if submit:
     datos_finales = {
-        "Fecha": fecha
+        "Fecha": fecha, 
+        "Objetivo": objetivo, 
+        "Asistentes": asistentes,
+        "Puntos Discutidos": puntos, 
+        "Pendientes Cliente": p_cliente, 
+        "Pendientes Mycloud": p_mycloud
+    }
+    try:
+        doc_generado = procesar_word(TEMPLATES[opcion], datos_finales)
+        buffer = io.BytesIO()
+        doc_generado.save(buffer)
+        buffer.seek(0)
+        st.success("✅ Documento generado!")
+        st.download_button(
+            label="📥 DESCARGAR ARCHIVO WORD", 
+            data=buffer, 
+            file_name=f"{opcion.replace(' ', '_')}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+    except Exception as e:
+        st.error(f"Error: {e}")
