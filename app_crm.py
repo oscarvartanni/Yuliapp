@@ -16,13 +16,47 @@ TEMPLATES = {
     "M101 Escenarios": "M101_CRM_Lista_de_escenarios_para_CRPUAT V2 (1).docx"
 }
 
-# --- 3. FUNCIONES AUXILIARES ---
+# --- 3. FUNCIONES DE EXTRACCIÓN Y FORMATO ---
 def aplicar_poppins(run, size=11):
     run.font.name = 'Poppins'
     run.font.size = Pt(size)
 
+def iterar_bloques(parent):
+    from docx.document import Document as _Document
+    parent_elm = parent.element.body if isinstance(parent, _Document) else parent._tc
+    for child in parent_elm.iterchildren():
+        if child.tag.endswith('p'):
+            yield Paragraph(child, parent)
+        elif child.tag.endswith('tbl'):
+            yield Table(child, parent)
+
+def extraer_informacion(archivo_subido):
+    """Extrae datos básicos de un docx para auto-rellenar el formulario."""
+    datos = {k: "" for k in ["Fecha", "Objetivo", "Asistentes", "Puntos Discutidos", "Pendientes Cliente", "Pendientes Mycloud"]}
+    if not archivo_subido: return datos
+    try:
+        doc = Document(archivo_subido)
+        contexto = None
+        for bloque in iterar_bloques(doc):
+            if isinstance(bloque, Paragraph):
+                txt = bloque.text.strip()
+                txt_l = txt.lower()
+                if "fecha:" in txt_l: datos["Fecha"] = txt.split(":", 1)[1].strip()
+                elif "objetivo:" in txt_l: datos["Objetivo"] = txt.split(":", 1)[1].strip()
+                elif "asistentes:" in txt_l: contexto = "Asistentes"
+                elif "puntos discutidos:" in txt_l: contexto = "Puntos Discutidos"
+                elif "pendientes del cliente" in txt_l: contexto = "Pendientes Cliente"
+                elif "pendientes mycloud" in txt_l: contexto = "Pendientes Mycloud"
+                elif txt and contexto in ["Asistentes", "Puntos Discutidos"]:
+                    datos[contexto] = (datos[contexto] + "\n" + txt).strip()
+            elif isinstance(bloque, Table) and contexto:
+                filas = [", ".join(c.text.strip() for c in r.cells if c.text.strip()) for r in bloque.rows[1:]]
+                datos[contexto] = "\n".join(f for f in filas if f)
+    except Exception as e:
+        st.warning(f"No se pudo extraer info: {e}")
+    return datos
+
 def rellenar_tabla(tabla, texto_lineas, columnas):
-    """Limpia y rellena tablas de forma genérica."""
     while len(tabla.rows) > 1:
         tabla._tbl.remove(tabla.rows[-1]._tr)
     for linea in texto_lineas.split('\n'):
@@ -34,106 +68,100 @@ def rellenar_tabla(tabla, texto_lineas, columnas):
             for p in nueva_fila[i].paragraphs:
                 for run in p.runs: aplicar_poppins(run)
 
+# --- 4. LÓGICA DE GENERACIÓN ---
 def procesar_word(template_path, datos, es_gap=False):
     doc = Document(template_path)
-    
-    # Rellenar Párrafos (Fecha y Objetivo)
     for p in doc.paragraphs:
         if "Fecha:" in p.text:
             p.text = "Fecha: "
             aplicar_poppins(p.add_run(datos.get('Fecha', '')))
-        elif "Objetivo:" in p.text:
-            p.text = "Objetivo: "
+        elif "Objetivo:" in p.text or "Alcance:" in p.text:
+            p.text = "Objetivo: " if not es_gap else "Objetivo : "
             aplicar_poppins(p.add_run(datos.get('Objetivo', '')))
         elif "Puntos discutidos:" in p.text and not es_gap:
             p.text = "Puntos discutidos:"
-            lineas = datos.get('Puntos Discutidos', '').split('\n')
-            for i, linea in enumerate(lineas, 1):
+            for i, linea in enumerate(datos.get('Puntos Discutidos', '').split('\n'), 1):
                 if linea.strip():
-                    nuevo_p = p.insert_paragraph_before(f"{i}. {linea.strip()}")
-                    aplicar_poppins(nuevo_p.runs[0] if nuevo_p.runs else nuevo_p.add_run())
+                    np = p.insert_paragraph_before(f"{i}. {linea.strip()}")
+                    aplicar_poppins(np.runs[0] if np.runs else np.add_run())
 
-    # Rellenar Tablas según el tipo de documento
     for tabla in doc.tables:
-        header = tabla.cell(0,0).text.lower()
-        if "nombre" in header: # Asistentes
-            rellenar_tabla(tabla, datos.get("Asistentes", ""), 2)
-        
-        # Lógica para Minuta (M100)
-        elif "pendientes del cliente" in header:
-            rellenar_tabla(tabla, datos.get("Pendientes Cliente", ""), 3)
-        elif "pendientes mycloud" in header:
-            rellenar_tabla(tabla, datos.get("Pendientes Mycloud", ""), 3)
-        
-        # Lógica para Gap Analysis (M102)
-        elif "módulos" in header or "item" in header:
-            if "módulo" in header: rellenar_tabla(tabla, datos.get("Modulos", ""), 4)
-            elif "descripción" in header: rellenar_tabla(tabla, datos.get("Custom", ""), 2)
-        elif "pendientes" in header and es_gap:
-            rellenar_tabla(tabla, datos.get("Pendientes_Gap", ""), 3)
-        elif "web services" in header:
-            rellenar_tabla(tabla, datos.get("WebServices", ""), 4)
-        elif "workflows" in header:
-            rellenar_tabla(tabla, datos.get("Workflows", ""), 5)
-            
+        h = tabla.cell(0,0).text.lower()
+        if "nombre" in h and "puesto" in h: rellenar_tabla(tabla, datos.get("Asistentes", ""), 2)
+        elif "pendientes del cliente" in h: rellenar_tabla(tabla, datos.get("Pendientes Cliente", ""), 3)
+        elif "pendientes mycloud" in h: rellenar_tabla(tabla, datos.get("Pendientes Mycloud", ""), 3)
+        elif "módulo" in h: rellenar_tabla(tabla, datos.get("Modulos", ""), 4)
+        elif "entrega" in h or "pendientes" in h: rellenar_tabla(tabla, datos.get("Pendientes_Gap", ""), 3)
+        elif "custom" in h: rellenar_tabla(tabla, datos.get("Custom", ""), 2)
+        elif "web services" in h: rellenar_tabla(tabla, datos.get("WebServices", ""), 4)
+        elif "workflows" in h: rellenar_tabla(tabla, datos.get("Workflows", ""), 5)
     return doc
 
-# --- 4. INTERFAZ PRINCIPAL ---
+# --- 5. INTERFAZ (SIDEBAR Y LOGO) ---
+with st.sidebar:
+    st.header("🎨 Identidad Visual")
+    logo_web = st.file_uploader("Sube tu logo:", type=["png", "jpg", "jpeg"])
+    
+    # Lógica de Logo: Prioridad archivo subido > logo.png local
+    if logo_web:
+        st.image(logo_web, use_container_width=True)
+    elif os.path.exists("logo.png"):
+        st.image("logo.png", use_container_width=True)
+    
+    st.divider()
+    opcion = st.selectbox("Selecciona Plantilla:", list(TEMPLATES.keys()))
+
+# --- 6. CUERPO PRINCIPAL ---
 st.title("🚀 Generador CRM Profesional")
 
-with st.sidebar:
-    st.header("Configuración")
-    logo_web = st.file_uploader("Sube el logo:", type=["png", "jpg", "jpeg"])
-    if logo_web: st.image(logo_web, use_container_width=True)
-    st.divider()
-    opcion = st.selectbox("Plantilla:", list(TEMPLATES.keys()))
+# RESTAURADO: Opción para subir documento de referencia
+archivo_ref = st.file_uploader("📂 Sube un documento de referencia para auto-completar (opcional):", type=["docx"])
+datos_auto = extraer_informacion(archivo_ref)
 
-# --- 5. FORMULARIO DINÁMICO ---
-with st.form(key="form_dinamico"):
-    st.subheader(f"Campos para: {opcion}")
-    col1, col2 = st.columns(2)
+# --- 7. FORMULARIO DINÁMICO ---
+with st.form(key="main_form"):
+    st.subheader(f"Campos: {opcion}")
+    c1, c2 = st.columns(2)
     
-    with col1:
-        fecha = st.text_input("Fecha")
-        asistentes = st.text_area("Asistentes (Nombre, Cargo)", height=100)
-        objetivo = st.text_area("Objetivo / Alcance", height=100)
+    with c1:
+        fecha = st.text_input("Fecha", value=datos_auto["Fecha"])
+        asistentes = st.text_area("Asistentes (Nombre, Cargo)", value=datos_auto["Asistentes"], height=150)
+        objetivo = st.text_area("Objetivo / Alcance", value=datos_auto["Objetivo"], height=100)
 
-    with col2:
+    with c2:
         if opcion == "M102 Gap Analysis":
-            modulos = st.text_area("Módulos (Item, Nombre, Descripción, Estatus)", placeholder="1, Ventas, Ajuste de campos, Pendiente")
-            pendientes_gap = st.text_area("Entrega / Pendientes (Tarea, Responsable, Fecha)")
-            custom = st.text_area("Custom Functions (Item, Descripción)")
-            # Campos extra abajo para Gap
-            ws = st.text_area("Web Services (Item, Nombre, Tipo, Parámetros)")
+            modulos = st.text_area("Módulos (Item, Nombre, Desc, Estatus)", placeholder="1, Ventas, Ajuste, Pendiente")
+            pend_gap = st.text_area("Pendientes/Entrega (Tarea, Resp, Fecha)")
+            custom = st.text_area("Custom Functions (Item, Desc)")
+            ws = st.text_area("Web Services (Item, Nombre, Tipo, Param)")
             wf = st.text_area("Workflows (Item, Módulo, Cuándo, Qué, Acciones)")
         else:
-            puntos = st.text_area("Puntos Discutidos (Uno por línea)", height=150)
-            p_cliente = st.text_area("Pendientes Cliente (Tarea, Responsable, Fecha)", height=100)
-            p_mycloud = st.text_area("Pendientes Mycloud (Tarea, Responsable, Fecha)", height=100)
+            puntos = st.text_area("Puntos Discutidos", value=datos_auto["Puntos Discutidos"], height=150)
+            p_cli = st.text_area("Pendientes Cliente", value=datos_auto["Pendientes Cliente"], height=100)
+            p_my = st.text_area("Pendientes Mycloud", value=datos_auto["Pendientes Mycloud"], height=100)
 
-    submit = st.form_submit_button("🔨 GENERAR DOCUMENTO")
+    btn = st.form_submit_button("🔨 GENERAR DOCUMENTO")
 
-if submit:
-    # Recopilar datos según la plantilla
+if btn:
     es_gap = (opcion == "M102 Gap Analysis")
     if es_gap:
-        datos_finales = {
+        final_dict = {
             "Fecha": fecha, "Asistentes": asistentes, "Objetivo": objetivo,
-            "Modulos": modulos, "Pendientes_Gap": pendientes_gap, 
-            "Custom": custom, "WebServices": ws, "Workflows": wf
+            "Modulos": modulos, "Pendientes_Gap": pend_gap, "Custom": custom,
+            "WebServices": ws, "Workflows": wf
         }
     else:
-        datos_finales = {
+        final_dict = {
             "Fecha": fecha, "Asistentes": asistentes, "Objetivo": objetivo,
-            "Puntos Discutidos": puntos, "Pendientes Cliente": p_cliente, "Pendientes Mycloud": p_mycloud
+            "Puntos Discutidos": puntos, "Pendientes Cliente": p_cli, "Pendientes Mycloud": p_my
         }
 
     try:
-        doc = procesar_word(TEMPLATES[opcion], datos_finales, es_gap=es_gap)
+        resultado = procesar_word(TEMPLATES[opcion], final_dict, es_gap=es_gap)
         buf = io.BytesIO()
-        doc.save(buf)
+        resultado.save(buf)
         buf.seek(0)
-        st.success("✅ ¡Documento generado con éxito!")
-        st.download_button("📥 Descargar Word", buf, f"{opcion}.docx")
+        st.success("✅ ¡Documento generado!")
+        st.download_button("📥 Descargar Archivo Word", buf, f"{opcion}.docx")
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Error al generar: {e}")
