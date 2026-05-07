@@ -6,17 +6,17 @@ from docx.text.paragraph import Paragraph
 import io
 import os
 
-# --- 1. CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="CRM Generator Pro", layout="wide")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="CRM Generator Pro 2.0", layout="wide")
 
-# --- 2. DEFINICIÓN DE PLANTILLAS ---
+# --- 1. DEFINICIÓN DE PLANTILLAS ---
 TEMPLATES = {
     "M100 Minuta": "M100_CRM_Minuta v2 (2).docx",
     "M102 Gap Analysis": "M102_CRM_Gap_Analysis V2 (3).docx",
     "M101 Escenarios": "M101_CRM_Lista_de_escenarios_para_CRPUAT V2 (1).docx"
 }
 
-# --- 3. FUNCIONES DE APOYO ---
+# --- 2. FUNCIONES DE APOYO ---
 def aplicar_poppins(run, size=11):
     run.font.name = 'Poppins'
     run.font.size = Pt(size)
@@ -30,9 +30,12 @@ def iterar_bloques(parent):
         elif child.tag.endswith('tbl'):
             yield Table(child, parent)
 
-# --- 4. EXTRACCIÓN MEJORADA (CORRECCIÓN AQUÍ) ---
+# --- 3. EXTRACCIÓN INTELIGENTE 2.1 (CON SOPORTE M102) ---
 def extraer_informacion(archivo_subido):
-    datos = {k: "" for k in ["Fecha", "Objetivo", "Asistentes", "Puntos Discutidos", "Pendientes Cliente", "Pendientes Mycloud"]}
+    # Diccionario base con campos de todos los tipos de documentos
+    datos = {k: "" for k in ["Fecha", "Objetivo", "Asistentes", "Puntos Discutidos", 
+                             "Pendientes Cliente", "Pendientes Mycloud", "Modulos", 
+                             "Pendientes_Gap", "Custom", "WebServices", "Workflows"]}
     if not archivo_subido: return datos
     
     try:
@@ -40,18 +43,15 @@ def extraer_informacion(archivo_subido):
         contexto = None
         
         for bloque in iterar_bloques(doc):
+            # LÓGICA PARA PÁRRAFOS (M100/M101 y Objetivo del M102)
             if isinstance(bloque, Paragraph):
                 txt = bloque.text.strip()
                 txt_l = txt.lower()
                 
-                # Extracción de Fecha (Línea simple)
                 if "fecha:" in txt_l:
                     datos["Fecha"] = txt.split(":", 1)[1].strip()
-                
-                # Detección de Secciones (Cambio de contexto)
-                elif "objetivo:" in txt_l or "alcance:" in txt_l:
+                elif any(x in txt_l for x in ["objetivo:", "alcance:"]):
                     contexto = "Objetivo"
-                    # Intentar extraer si el texto está en la misma línea
                     res = txt.split(":", 1)
                     if len(res) > 1 and res[1].strip():
                         datos["Objetivo"] = res[1].strip()
@@ -59,29 +59,46 @@ def extraer_informacion(archivo_subido):
                     contexto = "Asistentes"
                 elif "puntos discutidos:" in txt_l:
                     contexto = "Puntos Discutidos"
-                elif "pendientes del cliente" in txt_l or "pendientes cliente" in txt_l:
+                elif any(x in txt_l for x in ["pendientes del cliente", "pendientes cliente"]):
                     contexto = "Pendientes Cliente"
                 elif "pendientes mycloud" in txt_l:
                     contexto = "Pendientes Mycloud"
                 
-                # Captura de contenido de párrafo (si no es un encabezado)
                 elif txt and contexto:
-                    # Si el contexto es Objetivo y ya capturamos algo en la misma línea, 
-                    # evitamos duplicar si el párrafo es solo el encabezado
                     if contexto == "Objetivo" and (txt_l.startswith("objetivo") or txt_l.startswith("alcance")):
                         continue
                     datos[contexto] = (datos[contexto] + "\n" + txt).strip()
             
-            elif isinstance(bloque, Table) and contexto:
-                # Extraer filas de tablas (omitiendo encabezado)
-                filas = [", ".join(c.text.strip() for c in r.cells if c.text.strip()) for r in bloque.rows[1:]]
-                datos[contexto] = "\n".join(f for f in filas if f)
+            # LÓGICA PARA TABLAS (Específico para M102 Gap Analysis)
+            elif isinstance(bloque, Table):
+                # Detectar tipo de tabla por su primera fila
+                header_text = " ".join([c.text.lower() for c in bloque.rows[0].cells])
+                
+                # Extracción de Módulos (Nombre y Estatus) [cite: 58]
+                if "nombre del módulo" in header_text or "estatus" in header_text:
+                    filas = [", ".join(c.text.strip() for c in r.cells if c.text.strip()) for r in bloque.rows[1:]]
+                    datos["Modulos"] = "\n".join(f for f in filas if f)
+                
+                # Extracción de Pendientes de Entrega [cite: 59]
+                elif "pendientes/entrega" in header_text or "tarea" in header_text:
+                    filas = [", ".join(c.text.strip() for c in r.cells if c.text.strip()) for r in bloque.rows[1:]]
+                    datos["Pendientes_Gap"] = "\n".join(f for f in filas if f)
+                
+                # Extracción de Custom Functions [cite: 59]
+                elif "custom" in header_text:
+                    filas = [", ".join(c.text.strip() for c in r.cells if c.text.strip()) for r in bloque.rows[1:]]
+                    datos["Custom"] = "\n".join(f for f in filas if f)
+                    
+                # Si hay un contexto activo (M100/M101), procesar como tabla normal
+                elif contexto:
+                    filas = [", ".join(c.text.strip() for c in r.cells if c.text.strip()) for r in bloque.rows[1:]]
+                    datos[contexto] = "\n".join(f for f in filas if f)
                 
     except Exception as e:
         st.warning(f"Error al leer el documento: {e}")
     return datos
 
-# --- 5. LÓGICA DE PROCESAMIENTO ---
+# --- 4. GENERACIÓN DE DOCUMENTOS (MANTENIDO IGUAL PARA ESTABILIDAD) ---
 def rellenar_tabla(tabla, texto_lineas, columnas):
     while len(tabla.rows) > 1:
         tabla._tbl.remove(tabla.rows[-1]._tr)
@@ -100,7 +117,7 @@ def procesar_word(template_path, datos, es_gap=False):
         if "Fecha:" in p.text:
             p.text = "Fecha: "
             aplicar_poppins(p.add_run(datos.get('Fecha', '')))
-        elif "Objetivo:" in p.text or "Alcance:" in p.text:
+        elif any(x in p.text for x in ["Objetivo:", "Alcance:"]):
             p.text = "Objetivo: " if not es_gap else "Objetivo : "
             aplicar_poppins(p.add_run(datos.get('Objetivo', '')))
         elif "Puntos discutidos:" in p.text and not es_gap:
@@ -118,38 +135,32 @@ def procesar_word(template_path, datos, es_gap=False):
         elif "módulo" in h: rellenar_tabla(tabla, datos.get("Modulos", ""), 4)
         elif "entrega" in h or "pendientes" in h: rellenar_tabla(tabla, datos.get("Pendientes_Gap", ""), 3)
         elif "custom" in h: rellenar_tabla(tabla, datos.get("Custom", ""), 2)
-        elif "web services" in h: rellenar_tabla(tabla, datos.get("WebServices", ""), 4)
-        elif "workflows" in h: rellenar_tabla(tabla, datos.get("Workflows", ""), 5)
     return doc
 
-# --- 6. INTERFAZ ---
+# --- 5. INTERFAZ DE USUARIO ---
 with st.sidebar:
     st.header("🎨 Identidad Visual")
     logo_web = st.file_uploader("Sube tu logo:", type=["png", "jpg", "jpeg"])
     if logo_web: st.image(logo_web, use_container_width=True)
-    elif os.path.exists("logo.png"): st.image("logo.png", use_container_width=True)
     st.divider()
     opcion = st.selectbox("Selecciona Plantilla:", list(TEMPLATES.keys()))
 
-st.title("🚀 Generador CRM Profesional")
+st.title("🚀 Generador CRM Profesional v2.1")
 
-archivo_ref = st.file_uploader("📂 Sube la minuta anterior para auto-rellenar:", type=["docx"])
+archivo_ref = st.file_uploader("📂 Sube la minuta o Gap Analysis anterior:", type=["docx"])
 datos_auto = extraer_informacion(archivo_ref)
 
 with st.form(key="main_form"):
-    st.subheader(f"Edición de {opcion}")
     c1, c2 = st.columns(2)
-    
     with c1:
         fecha = st.text_input("Fecha", value=datos_auto["Fecha"])
         asistentes = st.text_area("Asistentes (Nombre, Cargo)", value=datos_auto["Asistentes"], height=150)
         objetivo = st.text_area("Objetivo / Alcance", value=datos_auto["Objetivo"], height=100)
-
     with c2:
         if opcion == "M102 Gap Analysis":
-            modulos = st.text_area("Módulos (Item, Nombre, Desc, Estatus)")
-            pend_gap = st.text_area("Pendientes/Entrega (Tarea, Resp, Fecha)")
-            custom = st.text_area("Custom Functions (Item, Desc)")
+            modulos = st.text_area("Módulos (Item, Nombre, Desc, Estatus)", value=datos_auto["Modulos"])
+            pend_gap = st.text_area("Pendientes/Entrega (Tarea, Resp, Fecha)", value=datos_auto["Pendientes_Gap"])
+            custom = st.text_area("Custom Functions (Item, Desc)", value=datos_auto["Custom"])
             ws = st.text_area("Web Services (Item, Nombre, Tipo, Param)")
             wf = st.text_area("Workflows (Item, Módulo, Cuándo, Qué, Acciones)")
         else:
@@ -172,7 +183,6 @@ if btn:
         "WebServices": ws if es_gap else "",
         "Workflows": wf if es_gap else ""
     }
-
     try:
         resultado = procesar_word(TEMPLATES[opcion], final_dict, es_gap=es_gap)
         buf = io.BytesIO()
