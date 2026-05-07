@@ -231,9 +231,11 @@ def procesar_word(template_path, datos, es_gap=False):
 # --- 5. INTERFAZ DE USUARIO ---
 with st.sidebar:
     st.header("🎨 Identidad Visual")
-    logo_web = st.file_uploader("Sube tu logo:", type=["png", "jpg", "jpeg"])
+    logo_web = st.file_uploader("Cambiar logo:", type=["png", "jpg", "jpeg"])
     if logo_web:
         st.image(logo_web, use_container_width=True)
+    elif os.path.exists("logo.png"):
+        st.image("logo.png", use_container_width=True)
     st.divider()
     opcion = st.selectbox("Selecciona Plantilla:", list(TEMPLATES.keys()))
 
